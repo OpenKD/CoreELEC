@@ -1,0 +1,423 @@
+diff --git a/drivers/amlogic/bluetooth/bt_device.c b/drivers/amlogic/bluetooth/bt_device.c
+index be43824..122a54e 100644
+--- a/drivers/amlogic/bluetooth/bt_device.c
++++ b/drivers/amlogic/bluetooth/bt_device.c
+@@ -143,8 +143,8 @@ static int bt_set_block(void *data, bool blocked)
+ 		pr_info("BCM_BT: going ON\n");
+ 		bt_device_on(pdata);
+ 	} else {
+-		pr_info("BCM_BT: going OFF\n");
+-	bt_device_off(pdata);
++		pr_info("BCM_BT: going SOFT-OFF, GPIO still being driven\n");
++	//bt_device_off(pdata);
+ 	}
+ 	return 0;
+ }
+@@ -239,7 +239,8 @@ static int bt_probe(struct platform_device *pdev)
+ 	bt_device_init(pdata);
+ 	/* default to bluetooth off */
+ 	/* rfkill_switch_all(RFKILL_TYPE_BLUETOOTH, 1); */
+-	/* bt_device_off(pdata); */
++	pr_info("driving bt gpio");
++	bt_device_on(pdata);
+ 
+ 	bt_rfk = rfkill_alloc("bt-dev", &pdev->dev,
+ 		RFKILL_TYPE_BLUETOOTH,
+diff --git a/drivers/amlogic/display/osd/osd_hw.c b/drivers/amlogic/display/osd/osd_hw.c
+index df0d7b6..e34c4ba 100644
+--- a/drivers/amlogic/display/osd/osd_hw.c
++++ b/drivers/amlogic/display/osd/osd_hw.c
+@@ -3530,6 +3530,10 @@ void osd_cursor_hw(u32 index, s16 x, s16 y, s16 xstart, s16 ystart, u32 osd_w,
+ 	} else
+ 		memcpy(&disp_tmp, &osd_hw.dispdata[OSD1],
+ 				sizeof(struct pandata_s));
++	if (osd_hw.scale[OSD1].h_enable)
++		osd_hw.scaledata[OSD2].x_end *= 2;
++	if (osd_hw.scale[OSD1].v_enable)
++		osd_hw.scaledata[OSD2].y_end *= 2;
+ 	if (osd_hw.scale[OSD2].h_enable && (osd_hw.scaledata[OSD2].x_start > 0)
+ 	    && (osd_hw.scaledata[OSD2].x_end > 0)) {
+ 		x = x * osd_hw.scaledata[OSD2].x_end /
+diff --git a/drivers/amlogic/display/osd/osd_rdma.c b/drivers/amlogic/display/osd/osd_rdma.c
+index 52f874c..1434aa3 100644
+--- a/drivers/amlogic/display/osd/osd_rdma.c
++++ b/drivers/amlogic/display/osd/osd_rdma.c
+@@ -206,7 +206,7 @@ static int update_table_item(u32 addr, u32 val, u8 irq_mode)
+ 
+ 	if (item_count > 500) {
+ 		/* rdma table is full */
+-		pr_info("update_table_item overflow!\n");
++		//pr_info("update_table_item overflow!\n");
+ 		return -1;
+ 	}
+ 	/* pr_debug("%02dth, ctrl: 0x%x, status: 0x%x, auto:0x%x, flag:0x%x\n",
+diff --git a/drivers/amlogic/display/vout/vout_serve.c b/drivers/amlogic/display/vout/vout_serve.c
+index 67a271a..f5eb3f5 100644
+--- a/drivers/amlogic/display/vout/vout_serve.c
++++ b/drivers/amlogic/display/vout/vout_serve.c
+@@ -839,6 +839,8 @@ static int __init get_vout_init_mode(char *str)
+ 	char *option;
+ 	int count = 3;
+ 	char find = 0;
++	char str2[1024];
++	char *ptr2 = str2;
+ 
+ 	/* init void vout_mode_uboot name */
+ 	memset(vout_mode_uboot, 0, sizeof(vout_mode_uboot));
+@@ -846,6 +848,10 @@ static int __init get_vout_init_mode(char *str)
+ 	if (NULL == str)
+ 		return -EINVAL;
+ 
++	strcpy(str2, str);
++	strcat(str2, ",en"); // logo was already displayed by uboot
++	ptr = ptr2 = str2;
++
+ 	do {
+ 		if (!isalpha(*ptr) && !isdigit(*ptr)) {
+ 			find = 1;
+@@ -857,7 +863,7 @@ static int __init get_vout_init_mode(char *str)
+ 
+ 	sep[0] = *ptr;
+ 	sep[1] = '\0';
+-	while ((count--) && (option = strsep(&str, sep))) {
++	while ((count--) && (option = strsep(&ptr2, sep))) {
+ 		/* vout_log_info("%s\n", option); */
+ 		str2lower(option);
+ 		vout_init_mode_parse(option);
+@@ -865,7 +871,7 @@ static int __init get_vout_init_mode(char *str)
+ 
+ 	return 0;
+ }
+-__setup("vout=", get_vout_init_mode);
++__setup("hdmimode=", get_vout_init_mode);
+ 
+ MODULE_AUTHOR("Platform-BJ <platform.bj@amlogic.com>");
+ MODULE_DESCRIPTION("VOUT Server Module");
+diff --git a/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_edid.c b/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_edid.c
+index be47532..8cdf0ed 100644
+--- a/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_edid.c
++++ b/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_edid.c
+@@ -2032,14 +2032,19 @@ int hdmitx_edid_parse(struct hdmitx_dev *hdmitx_device)
+ 	/* update RX HDR information */
+ 	info = get_current_vinfo();
+ 	if (info) {
+-		info->hdr_info.hdr_support = (pRXCap->hdr_sup_eotf_sdr << 0)
+-			| (pRXCap->hdr_sup_eotf_hdr << 1)
+-			| (pRXCap->hdr_sup_eotf_smpte_st_2084 << 2);
+-		info->hdr_info.lumi_max = pRXCap->hdr_lum_max;
+-		info->hdr_info.lumi_avg = pRXCap->hdr_lum_avg;
+-		info->hdr_info.lumi_min = pRXCap->hdr_lum_min;
+-		pr_info("hdmitx: update RX hdr info %x\n",
+-			info->hdr_info.hdr_support);
++		if (!((strncmp(info->name, "480cvbs", 7) == 0) ||
++		(strncmp(info->name, "576cvbs", 7) == 0) ||
++		(strncmp(info->name, "null", 4) == 0))) {
++			info->hdr_info.hdr_support =
++				(pRXCap->hdr_sup_eotf_sdr << 0) |
++				(pRXCap->hdr_sup_eotf_hdr << 1) |
++				(pRXCap->hdr_sup_eotf_smpte_st_2084 << 2);
++			info->hdr_info.lumi_max = pRXCap->hdr_lum_max;
++			info->hdr_info.lumi_avg = pRXCap->hdr_lum_avg;
++			info->hdr_info.lumi_min = pRXCap->hdr_lum_min;
++			pr_info("hdmitx: update rx hdr info %x at edid parsing\n",
++				info->hdr_info.hdr_support);
++		}
+ 	}
+ 	return 0;
+ 
+diff --git a/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_main.c b/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_main.c
+old mode 100644
+new mode 100755
+index c0bb9a6..772b5e8
+--- a/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_main.c
++++ b/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_main.c
+@@ -37,6 +37,7 @@
+ #include <linux/uaccess.h>
+ #include <linux/err.h>
+ /* #include <mach/am_regs.h> */
++#include <linux/time.h>
+ 
+ /* #include <linux/amlogic/osd/osd_dev.h> */
+ #include <linux/amlogic/aml_gpio_consumer.h>
+@@ -45,6 +46,7 @@
+ #include "hdmi_tx_hdcp.h"
+ 
+ #include <linux/input.h>
++
+ #include <linux/irq.h>
+ #include <linux/io.h>
+ #include <linux/of.h>
+@@ -240,7 +242,7 @@ static struct early_suspend hdmitx_early_suspend_handler = {
+ 
+ #define INIT_FLAG_NOT_LOAD 0x80
+ 
+-int hdmi_ch = 1;		/* 1: 2ch */
++int hdmi_ch = 0;		/* 0: 2ch */
+ 
+ static unsigned char init_flag;
+ #undef DISABLE_AUDIO
+@@ -532,14 +534,18 @@ static int set_disp_mode_auto(void)
+ 	info->fresh_tx_hdr_pkt = hdmitx_set_drm_pkt;
+ 	info->fresh_tx_vsif_pkt = hdmitx_set_vsif_pkt;
+ 	info->dv_info = &hdev->RXCap.dv_info;
+-	info->hdr_info.hdr_support = (hdev->RXCap.hdr_sup_eotf_sdr << 0)
+-			| (hdev->RXCap.hdr_sup_eotf_hdr << 1)
+-			| (hdev->RXCap.hdr_sup_eotf_smpte_st_2084 << 2);
+-	info->hdr_info.lumi_max = hdev->RXCap.hdr_lum_max;
+-	info->hdr_info.lumi_avg = hdev->RXCap.hdr_lum_avg;
+-	info->hdr_info.lumi_min = hdev->RXCap.hdr_lum_min;
+-	pr_info("hdmitx: update rx hdr info %x\n",
+-		info->hdr_info.hdr_support);
++	if (!((strncmp(info->name, "480cvbs", 7) == 0) ||
++		(strncmp(info->name, "576cvbs", 7) == 0) ||
++		(strncmp(info->name, "null", 4) == 0))) {
++		info->hdr_info.hdr_support = (hdev->RXCap.hdr_sup_eotf_sdr << 0)
++				| (hdev->RXCap.hdr_sup_eotf_hdr << 1)
++				| (hdev->RXCap.hdr_sup_eotf_smpte_st_2084 << 2);
++		info->hdr_info.lumi_max = hdev->RXCap.hdr_lum_max;
++		info->hdr_info.lumi_avg = hdev->RXCap.hdr_lum_avg;
++		info->hdr_info.lumi_min = hdev->RXCap.hdr_lum_min;
++		pr_info("hdmitx: update rx hdr info %x\n",
++			info->hdr_info.hdr_support);
++	}
+ 	hdmi_physcial_size_update(info, hdev);
+ 
+ 	/* If info->name equals to cvbs, then set mode to I mode to hdmi
+@@ -1095,6 +1101,10 @@ static void hdmitx_set_vsif_pkt(enum eotf_type type, uint8_t tunnel_mode)
+ 		return;
+ 	}
+ 
++	if (hdev->RXCap.dv_info.ieeeoui != 0x00d046) {
++		return;
++	}
++
+ 	if ((vic == HDMI_3840x2160p30_16x9) ||
+ 	    (vic == HDMI_3840x2160p25_16x9) ||
+ 	    (vic == HDMI_3840x2160p24_16x9) ||
+diff --git a/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_video.c b/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_video.c
+index 9381731..933be32 100644
+--- a/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_video.c
++++ b/drivers/amlogic/hdmi/hdmi_tx_20/hdmi_tx_video.c
+@@ -593,6 +593,18 @@ void hdmitx_output_rgb(void)
+ 	hdmi_output_rgb = 1;
+ }
+ 
++static int is_philips_2009(struct rx_cap *pRXCap)
++{
++	if ((strncmp(pRXCap->ReceiverBrandName, "PHL", strlen(pRXCap->ReceiverBrandName)) == 0) && \
++		(strncmp(pRXCap->ReceiverProductName, "Philips", strlen(pRXCap->ReceiverProductName)) == 0) && \
++		(pRXCap->manufacture_year == 19)) {
++		hdmi_print(INF, SYS, "This is a 2009 Philips TV which misreports colour caps");
++		return 1;
++	}
++	else
++		return 0;
++}
++
+ int hdmitx_set_display(struct hdmitx_dev *hdev, enum hdmi_vic VideoCode)
+ {
+ 	struct hdmitx_vidpara *param = NULL;
+@@ -618,7 +630,7 @@ int hdmitx_set_display(struct hdmitx_dev *hdev, enum hdmi_vic VideoCode)
+ 	hdev->cur_video_param = param;
+ 	if (param) {
+ 		param->color = param->color_prefer;
+-		if (hdmi_output_rgb) {
++		if (hdmi_output_rgb || is_philips_2009(&hdev->RXCap)) {
+ 			param->color = COLORSPACE_RGB444;
+ 		} else {
+ 			/* HDMI CT 7-24 Pixel Encoding
+@@ -647,8 +659,7 @@ int hdmitx_set_display(struct hdmitx_dev *hdev, enum hdmi_vic VideoCode)
+ 				break;
+ 			}
+ 			if (param->color == COLORSPACE_RGB444) {
+-				hdev->para->cs = COLORSPACE_RGB444;
+-				hdev->para->cd = COLORDEPTH_24B;
++				hdev->para->cs = hdev->cur_video_param->color;
+ 				pr_info("hdmitx: rx edid only support RGB format\n");
+ 			}
+ 
+diff --git a/drivers/amlogic/hdmi/hdmi_tx_20/hw/hdmi_tx_hw.c b/drivers/amlogic/hdmi/hdmi_tx_20/hw/hdmi_tx_hw.c
+old mode 100644
+new mode 100755
+index 476063f..c6dd677
+--- a/drivers/amlogic/hdmi/hdmi_tx_20/hw/hdmi_tx_hw.c
++++ b/drivers/amlogic/hdmi/hdmi_tx_20/hw/hdmi_tx_hw.c
+@@ -1968,36 +1967,42 @@ next:
+ 		hd_set_reg_bits(P_VPU_HDMI_SETTING, 0, 4, 4);
+ 		hd_set_reg_bits(P_VPU_HDMI_SETTING, 1, 8, 1);
+ 	}
+-	switch (hdev->cur_video_param->color_depth) {
++	switch (hdev->para->cd) {
+ 	case COLORDEPTH_30B:
+ 	case COLORDEPTH_36B:
+ 	case COLORDEPTH_48B:
+ 		if (get_cpu_type() >= MESON_CPU_MAJOR_ID_GXM) {
+ 			unsigned int hs_flag = 0;
++                        /* 12-10 dithering on */
++                        hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 1, 4, 1);
+ 			/* hsync/vsync not invert */
+ 			hs_flag = (hd_read_reg(P_VPU_HDMI_SETTING) >> 2) & 0x3;
+ 			hd_set_reg_bits(P_VPU_HDMI_SETTING, 0, 2, 2);
++                        /* 12-10 rounding off */
++                        hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 0, 10, 1);
+ 			/* 10-8 dithering off (2x2 old dither) */
+ 			hd_set_reg_bits(P_VPU_HDMI_DITH_CNTL, 0, 4, 1);
+ 			/* set hsync/vsync */
+ 			hd_set_reg_bits(P_VPU_HDMI_DITH_CNTL, hs_flag, 2, 2);
++                } else {
++                        hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 0, 4, 1);
++                        hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 0, 10, 1);
+ 		}
+-		/* 12-10 dithering off (10-8 <= GXL) */
+-		hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 0, 4, 1);
+-		/* 12-10 rounding off (10-8 <= GXL) */
+-		hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 0, 10, 1);
+ 		break;
+ 	default:
+ 		if (get_cpu_type() >= MESON_CPU_MAJOR_ID_GXM) {
++                        /* 12-10 dithering off */
++                        hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 0, 4, 1);
++                        /* 12-10 rounding on */
++                        hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 1, 10, 1);
+ 			/* 10-8 dithering on (2x2 old dither) */
+ 			hd_set_reg_bits(P_VPU_HDMI_DITH_CNTL, 1, 4, 1);
+ 			/* set hsync/vsync as default 0 */
+ 			hd_set_reg_bits(P_VPU_HDMI_DITH_CNTL, 0, 2, 2);
+-		}
+-		/* 10-8 dithering on (10-8 <= GXL) */
+-		hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 1, 4, 1);
+-		/* 12-10 rounding on (10-8 <= GXL) */
+-		hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 1, 10, 1);
++		} else {
++                       hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 1, 4, 1);
++                       hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 1, 10, 1);
++                }
+ 		break;
+ 	}
+ 
+@@ -3013,6 +3047,30 @@ static void hdmitx_debug(struct hdmitx_dev *hdev, const char *buf)
+ 			hdmi_print(INF, HPD "hdmitx: unlock hpd\n");
+ 		}
+ 		return;
++	} else if (strncmp(tmpbuf, "dither", 6) == 0) {
++		int dither = 0;
++		if (tmpbuf[6] == '1')
++			dither = 1;
++		hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, dither, 4, 1);
++		pr_info("hdmitx: adjust dither = %d\n", dither);
++		return;
++        } else if (strncmp(tmpbuf, "round", 5) == 0) {
++                int round = 0;
++                if (tmpbuf[5] == '1')
++                        round = 1;
++		hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, round, 10, 1);
++                pr_info("hdmitx: adjust round = %d\n", round);
++		return;
++	} else if (strncmp(tmpbuf, "do2020", 6) == 0) {
++		pr_info("hdmitx: BT2020 AVI ON\n");
++		hdmitx_set_reg_bits(HDMITX_DWC_FC_AVICONF1, 3, 6, 2);
++                hdmitx_set_reg_bits(HDMITX_DWC_FC_AVICONF2, 6, 4, 3);
++		return;
++        } else if (strncmp(tmpbuf, "no2020", 6) == 0) {
++		pr_info("hdmitx: BT2020 AVI OFF\n");
++                hdmitx_set_reg_bits(HDMITX_DWC_FC_AVICONF1, 2, 6, 2);
++                hdmitx_set_reg_bits(HDMITX_DWC_FC_AVICONF2, 0, 4, 3);
++		return;
+ 	} else if (strncmp(tmpbuf, "hpd_stick", 9) == 0) {
+ 		if (tmpbuf[9] == '1')
+ 			hdev->hdcp_hpd_stick = 1;
+@@ -3576,8 +3634,6 @@ static int hdmitx_cntl_ddc(struct hdmitx_dev *hdev, unsigned cmd,
+ 	case DDC_HDCP_MUX_INIT:
+ 		if (argv == 2) {
+ 			hdmitx_ddc_hw_op(DDC_MUX_DDC);
+-			hdmitx_set_reg_bits(HDMITX_DWC_MC_CLKDIS, 1, 6, 1);
+-			udelay(5);
+ 			hdmitx_wr_reg(HDMITX_DWC_HDCP22REG_CTRL, 0x6);
+ 			hdmitx_set_reg_bits(HDMITX_TOP_SW_RESET, 1, 5, 1);
+ 			udelay(10);
+@@ -4607,6 +4663,14 @@ static void config_hdmi20_tx(enum hdmi_vic vic,
+ 		}
+ 	}
+ 
++	if (hdev->flag_3dfp) {
++		hdmitx_set_reg_bits(HDMITX_DWC_FC_DATAUTO0, 1, 3, 1);
++		hdmitx_set_reg_bits(HDMITX_DWC_FC_PACKET_TX_EN, 1, 4, 1);
++	 } else {
++		hdmitx_set_reg_bits(HDMITX_DWC_FC_DATAUTO0, 0, 3, 1);
++		hdmitx_set_reg_bits(HDMITX_DWC_FC_PACKET_TX_EN, 0, 4, 1);
++	}
++
+ 	hdmitx_wr_reg(HDMITX_DWC_FC_RDRB0,  0);
+ 	hdmitx_wr_reg(HDMITX_DWC_FC_RDRB1,  0);
+ 	hdmitx_wr_reg(HDMITX_DWC_FC_RDRB2,  0);
+diff --git a/drivers/amlogic/hdmi/hdmi_tx_20/hw/hw_clk.c b/drivers/amlogic/hdmi/hdmi_tx_20/hw/hw_clk.c
+index 4df3b16..e3a0bf9 100644
+--- a/drivers/amlogic/hdmi/hdmi_tx_20/hw/hw_clk.c
++++ b/drivers/amlogic/hdmi/hdmi_tx_20/hw/hw_clk.c
+@@ -434,6 +434,11 @@ static void set_hpll_od3_clk_div(int div_sel)
+ 	int shift_val = 0;
+ 	int shift_sel = 0;
+ 
++	/* When div 6.25, need to reset vid_pll_div */
++	if (div_sel == VID_PLL_DIV_6p25) {
++		mdelay(1);
++		hd_set_reg_bits(P_RESET0_REGISTER, 1, 7, 1);
++	}
+ 	pr_info("%s[%d] div = %d\n", __func__, __LINE__, div_sel);
+ 	/* Disable the output clock */
+ 	hd_set_reg_bits(P_HHI_VID_PLL_CLK_DIV, 0, 18, 2);
+diff --git a/drivers/amlogic/input/saradc/saradc.c b/drivers/amlogic/input/saradc/saradc.c
+index 2840341..aac6f57 100644
+--- a/drivers/amlogic/input/saradc/saradc.c
++++ b/drivers/amlogic/input/saradc/saradc.c
+@@ -231,17 +231,28 @@ int get_adc_sample_early(int dev_id, int ch, char if_10bit)
+ 		min = min_12bit;
+ 
+ 	adc = gp_saradc;
+-	mem_base = adc->mem_base;
+-	if (!adc || getb(mem_base, FLAG_BUSY_BL30)
+-		|| (adc->state != SARADC_STATE_IDLE))
++
++	if (!adc)
+ 		return -1;
+ 
++	mem_base = adc->mem_base;
++
++	count = 0;
+ 	spin_lock_irqsave(&adc->lock, flags);
+-	adc->state = SARADC_STATE_BUSY;
++	while (getb(mem_base, FLAG_BUSY_BL30) ||
++			(adc->state != SARADC_STATE_IDLE)) {
++		if (++count > 200) {
++			saradc_err("get adc res timeout!\n");
++			spin_unlock_irqrestore(&adc->lock, flags);
++			return -1;
++		}
++		udelay(1);
++	}
+ 	setb(mem_base, FLAG_BUSY_KERNEL, 1);
+ 	isb();
+ 	dsb(sy);
+-	udelay(1);
++	udelay(5);
++	adc->state = SARADC_STATE_BUSY;
+ 	if (getb(mem_base, FLAG_BUSY_BL30)) {
+ 		value = -1;
+ 		goto end;
+diff --git a/drivers/amlogic/usb/dwc_otg/310/dwc_otg_pcd_linux.c b/drivers/amlogic/usb/dwc_otg/310/dwc_otg_pcd_linux.c
+index 38eaa07..b26eb98 100644
+--- a/drivers/amlogic/usb/dwc_otg/310/dwc_otg_pcd_linux.c
++++ b/drivers/amlogic/usb/dwc_otg/310/dwc_otg_pcd_linux.c
+@@ -1256,9 +1256,11 @@ int dwc_usb_change(struct notifier_block *nb,
+ 
+ 	if (value) {
+ 		DWC_DEBUGPL(DBG_PCDV, "start usb device\n");
++		dwc_otg_enable_global_interrupts(otg_dev->core_if);
+ 		otg_dev->pcd->core_if->pcd_cb->start(otg_dev->pcd);
+ 	} else {
+ 		DWC_DEBUGPL(DBG_PCDV, "stop usb device\n");
++		dwc_otg_disable_global_interrupts(otg_dev->core_if);
+ 		otg_dev->pcd->core_if->pcd_cb->stop(otg_dev->pcd);
+ 	}
+ 
+

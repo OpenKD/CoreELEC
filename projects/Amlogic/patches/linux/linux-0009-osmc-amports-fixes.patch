@@ -1,0 +1,686 @@
+diff --git a/drivers/amlogic/amports/vh264.c b/drivers/amlogic/amports/vh264.c
+index d33a4ff..cbfa65b 100644
+--- a/drivers/amlogic/amports/vh264.c
++++ b/drivers/amlogic/amports/vh264.c
+@@ -1527,7 +1527,9 @@ static void vh264_isr(void)
+ 
+ 				h264_pts_count++;
+ 			} else {
+-				if (!idr_flag)
++				/* non-idr or non-I frame will set pts_valid */
++				if ((!idr_flag) &&
++					(!(slice_type == SLICE_TYPE_I)))
+ 					pts_valid = 0;
+ 			}
+ 
+diff --git a/drivers/amlogic/amports/vh265.c b/drivers/amlogic/amports/vh265.c
+index 1987cf9..5cc2c59 100644
+--- a/drivers/amlogic/amports/vh265.c
++++ b/drivers/amlogic/amports/vh265.c
+@@ -97,6 +97,8 @@
+ #define DUR2PTS(x) ((x)*90/96)
+ #define HEVC_SIZE (4096*2304)
+ 
++static struct semaphore h265_sema;
++
+ struct hevc_state_s;
+ static int hevc_print(struct hevc_state_s *hevc,
+ 	int debug_flag, const char *fmt, ...);
+@@ -268,7 +270,7 @@ static u32 dynamic_buf_num_margin;
+ #else
+ static u32 buf_alloc_width;
+ static u32 buf_alloc_height;
+-static u32 dynamic_buf_num_margin = 8;
++static u32 dynamic_buf_num_margin = 12;
+ #endif
+ static u32 max_buf_num = 16;
+ static u32 buf_alloc_size;
+@@ -1421,7 +1423,6 @@ struct hevc_state_s {
+ 	u32 start_decoding_time;
+ 
+ 	int show_frame_num;
+-	struct semaphore h265_sema;
+ #ifdef USE_UNINIT_SEMA
+ 	struct semaphore h265_uninit_done_sema;
+ #endif
+@@ -7020,7 +7021,7 @@ send_again:
+ 				schedule_work(&hevc->work);
+ 			} else
+ #endif
+-				up(&hevc->h265_sema);
++				up(&h265_sema);
+ 			hevc_print(hevc, 0, "set pic_list_init_flag 1\n");
+ 		}
+ 		return IRQ_HANDLED;
+@@ -7395,7 +7396,7 @@ static int h265_task_handle(void *data)
+ 			hevc_print(hevc, 0,
+ 			"ERROR: use_cma can not be changed dynamically\n");
+ 		}
+-		ret = down_interruptible(&hevc->h265_sema);
++		ret = down_interruptible(&h265_sema);
+ 		if ((hevc->init_flag != 0) && (hevc->pic_list_init_flag == 1)) {
+ 			/*USE_BUF_BLOCK*/
+ 			init_buf_list(hevc);
+@@ -7737,7 +7738,7 @@ static s32 vh265_init(struct hevc_state_s *hevc)
+ 
+ 	if (use_cma) {
+ 		if (h265_task == NULL) {
+-			sema_init(&hevc->h265_sema, 1);
++			sema_init(&h265_sema, 1);
+ #ifdef USE_UNINIT_SEMA
+ 			sema_init(
+ 			&hevc->h265_uninit_done_sema, 0);
+@@ -7775,9 +7776,7 @@ static s32 vh265_init(struct hevc_state_s *hevc)
+ 		WRITE_VREG(HEVC_PARSER_IF_CONTROL,
+ 				READ_VREG(HEVC_PARSER_IF_CONTROL) | ((1 << 6) |
+ 					(1 << 3) | (1 << 1)));	/* 6, 3, 1 */
+-		WRITE_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG,
+-				READ_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG) |
+-				0xffffffff);	/* 31:0 */
++		WRITE_VREG(HEVCD_IPP_DYNCLKGATE_CONFIG, 0xffffffff);
+ 		WRITE_VREG(HEVCD_MCRCC_CTL1, READ_VREG(HEVCD_MCRCC_CTL1) |
+ 				(1 << 3));	/* 3 */
+ 	}
+@@ -7846,7 +7845,7 @@ static int vh265_stop(struct hevc_state_s *hevc)
+ 		int ret;
+ #endif
+ 		hevc->uninit_list = 1;
+-		up(&hevc->h265_sema);
++		up(&h265_sema);
+ #ifdef USE_UNINIT_SEMA
+ 		ret = down_interruptible(
+ 			&hevc->h265_uninit_done_sema);
+diff --git a/drivers/amlogic/amports/video.c b/drivers/amlogic/amports/video.c
+index 3c72d99..c4dd102 100644
+--- a/drivers/amlogic/amports/video.c
++++ b/drivers/amlogic/amports/video.c
+@@ -691,7 +691,7 @@ static u32 ori2_start_y_lines;
+ static u32 ori2_end_y_lines;
+ 
+ /* wide settings */
+-static u32 wide_setting;
++static u32 wide_setting = 1;
+ 
+ /* black out policy */
+ #if defined(CONFIG_JPEGLOGO)
+@@ -1429,14 +1429,14 @@ static void zoom_get_vert_pos(struct vframe_s *vf, u32 vpp_3d_mode, u32 *ls,
+ 				*rs = *ls + (height >> 1);
+ 				*re = *le + (height >> 1);
+ 			}
+-		}
+-		if ((process_3d_type & MODE_3D_TO_2D_MASK)
+-		    || (process_3d_type & MODE_3D_OUT_LR)) {
+-			/* same width,half height */
+-			*ls = zoom_start_y_lines;
+-			*le = zoom_end_y_lines;
+-			*rs = zoom_start_y_lines + (height >> 1);
+-			*re = zoom_end_y_lines + (height >> 1);
++			if ((process_3d_type & MODE_3D_TO_2D_MASK)
++			    || (process_3d_type & MODE_3D_OUT_LR)) {
++				/* same width,half height */
++				*ls = zoom_start_y_lines;
++				*le = zoom_end_y_lines;
++				*rs = zoom_start_y_lines + (height >> 1);
++				*re = zoom_end_y_lines + (height >> 1);
++			}
+ 		}
+ 		break;
+ 	case VPP_3D_MODE_LR:
+@@ -4682,6 +4682,12 @@ cur_dev->vpp_off,0,VPP_VD2_ALPHA_BIT,9);//vd2 alpha must set
+ 	/* VPP one time settings */
+ 	wait_sync = 0;
+ 
++	if (vinfo && VSYNC_RD_MPEG_REG(
++		VPP_POSTBLEND_H_SIZE + cur_dev->vpp_off)
++		!= vinfo->width)
++		VSYNC_WR_MPEG_REG(
++			VPP_POSTBLEND_H_SIZE + cur_dev->vpp_off,
++			vinfo->width);
+ 	if (cur_dispbuf && cur_dispbuf->process_fun) {
+ 		/* for new deinterlace driver */
+ #ifdef CONFIG_VSYNC_RDMA
+diff --git a/drivers/amlogic/amports/vmpeg12.c b/drivers/amlogic/amports/vmpeg12.c
+index ff2a7e7..fdc9ab9 100644
+--- a/drivers/amlogic/amports/vmpeg12.c
++++ b/drivers/amlogic/amports/vmpeg12.c
+@@ -461,7 +461,11 @@ static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
+ #ifdef NV21
+ 			vf->type |= VIDTYPE_VIU_NV21;
+ #endif
+-			vf->duration >>= 1;
++			if (info & PICINFO_RPT_FIRST)
++				vf->duration /= 3;
++			else
++				vf->duration >>= 1;
++
+ 			vf->duration_pulldown = (info & PICINFO_RPT_FIRST) ?
+ 						vf->duration >> 1 : 0;
+ 			vf->duration += vf->duration_pulldown;
+@@ -503,7 +507,10 @@ static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
+ #ifdef NV21
+ 			vf->type |= VIDTYPE_VIU_NV21;
+ #endif
+-			vf->duration >>= 1;
++                        if (info & PICINFO_RPT_FIRST)
++                                vf->duration /= 3;
++                        else
++                                vf->duration >>= 1;
+ 			vf->duration_pulldown = (info & PICINFO_RPT_FIRST) ?
+ 					vf->duration >> 1 : 0;
+ 			vf->duration += vf->duration_pulldown;
+diff --git a/drivers/amlogic/amvecm/amcsc.c b/drivers/amlogic/amvecm/amcsc.c
+index a75ad3a..8418f9b 100644
+--- a/drivers/amlogic/amvecm/amcsc.c
++++ b/drivers/amlogic/amvecm/amcsc.c
+@@ -123,6 +123,10 @@ static bool debug_csc;
+ module_param(debug_csc, bool, 0664);
+ MODULE_PARM_DESC(debug_csc, "\n debug_csc\n");
+ 
++static bool print_lut_mtx;
++module_param(print_lut_mtx, bool, 0664);
++MODULE_PARM_DESC(print_lut_mtx, "\n print_lut_mtx\n");
++
+ static bool skip_csc_en;
+ module_param(skip_csc_en, bool, 0664);
+ MODULE_PARM_DESC(skip_csc_en, "\n skip_csc_en\n");
+@@ -1193,6 +1197,9 @@ static unsigned int oetf_41_linear_mapping[OSD_OETF_LUT_SIZE] = {
+ };
+ 
+ /* following array generated from model, do not edit */
++static int video_lut_swtich;
++module_param(video_lut_swtich, int, 0664);
++MODULE_PARM_DESC(video_lut_swtich, "\n video_lut_swtich\n");
+ 
+ /* gamma=2.200000 lumin=500 boost=0.075000 */
+ static unsigned int display_scale_factor =
+@@ -1501,7 +1508,7 @@ void set_vpp_matrix(int m_select, int *s, int on)
+ 	int *m = NULL;
+ 	int size = 0;
+ 	int i;
+-	if (debug_csc)
++	if (debug_csc && print_lut_mtx)
+ 		print_vpp_matrix(m_select, s, on);
+ 	if (m_select == VPP_MATRIX_OSD) {
+ 		m = osd_matrix_coeff;
+@@ -2016,6 +2023,7 @@ void set_vpp_lut(
+ 
+ 	if (lut_sel == VPP_LUT_OSD_OETF) {
+ 		/* enable latched */
++		WRITE_VPP_REG_BITS(VIU_OSD1_OETF_CTL, 1, 28, 1);
+ 		if (r && r_map)
+ 			for (i = 0; i < OSD_OETF_LUT_SIZE; i++)
+ 				r_map[i] = r[i];
+@@ -2153,7 +2161,7 @@ void set_vpp_lut(
+ 		} else
+ 			WRITE_VPP_REG_BITS(ctrl_port, 0, 12, 3);
+ 	}
+-	if (debug_csc)
++	if (debug_csc && print_lut_mtx)
+ 		print_vpp_lut(lut_sel, on);
+ }
+ 
+@@ -2609,12 +2617,14 @@ int signal_type_changed(struct vframe_s *vf, struct vinfo_s *vinfo)
+ enum vpp_matrix_csc_e get_csc_type(void)
+ {
+ 	enum vpp_matrix_csc_e csc_type = VPP_MATRIX_NULL;
+-	if (signal_color_primaries == 1) {
++	if ((signal_color_primaries == 1) &&
++		(signal_transfer_characteristic < 14)) {
+ 		if (signal_range == 0)
+ 			csc_type = VPP_MATRIX_YUV709_RGB;
+ 		else
+ 			csc_type = VPP_MATRIX_YUV709F_RGB;
+-	} else if (signal_color_primaries == 3) {
++	} else if ((signal_color_primaries == 3) &&
++			(signal_transfer_characteristic < 14)) {
+ 		if (signal_range == 0)
+ 			csc_type = VPP_MATRIX_YUV601_RGB;
+ 		else
+@@ -3150,6 +3160,97 @@ static void hdr_process_pq_enable(int enable)
+ 	/*cm_en = enable;*/
+ }
+ 
++static void vpp_lut_curve_set(enum vpp_lut_sel_e lut_sel)
++{
++	if (lut_sel == VPP_LUT_EOTF) {
++		/* eotf lut 2048 */
++		if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXL) ||
++			(get_cpu_type() == MESON_CPU_MAJOR_ID_GXM)) {
++			if (video_lut_swtich == 1)
++				/*350nit alpha_low = 0.12; */
++				set_vpp_lut(VPP_LUT_EOTF,
++					eotf_33_2084_mapping_level1_box, /* R */
++					eotf_33_2084_mapping_level1_box, /* G */
++					eotf_33_2084_mapping_level1_box, /* B */
++					CSC_ON);
++			else if (video_lut_swtich == 2)
++				/*800nit alpha_low = 0.12; */
++				set_vpp_lut(VPP_LUT_EOTF,
++					eotf_33_2084_mapping_level2_box, /* R */
++					eotf_33_2084_mapping_level2_box, /* G */
++					eotf_33_2084_mapping_level2_box, /* B */
++					CSC_ON);
++			else if (video_lut_swtich == 3)
++				/*400nit alpha_low = 0.20; */
++				set_vpp_lut(VPP_LUT_EOTF,
++					eotf_33_2084_mapping_level3_box, /* R */
++					eotf_33_2084_mapping_level3_box, /* G */
++					eotf_33_2084_mapping_level3_box, /* B */
++					CSC_ON);
++			else if (video_lut_swtich == 4)
++				/*450nit alpha_low = 0.12; */
++				set_vpp_lut(VPP_LUT_EOTF,
++					eotf_33_2084_mapping_level4_box, /* R */
++					eotf_33_2084_mapping_level4_box, /* G */
++					eotf_33_2084_mapping_level4_box, /* B */
++					CSC_ON);
++			else
++				/* eotf lut 2048 */
++				/*600nit  alpha_low = 0.12;*/
++				set_vpp_lut(VPP_LUT_EOTF,
++					eotf_33_2084_mapping_box, /* R */
++					eotf_33_2084_mapping_box, /* G */
++					eotf_33_2084_mapping_box, /* B */
++					CSC_ON);
++		} else
++			set_vpp_lut(VPP_LUT_EOTF,
++				eotf_33_2084_mapping, /* R */
++				eotf_33_2084_mapping, /* G */
++				eotf_33_2084_mapping, /* B */
++				CSC_ON);
++	} else if (lut_sel == VPP_LUT_OETF) {
++		/* oetf lut bypass */
++		if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXL) ||
++			(get_cpu_type() == MESON_CPU_MAJOR_ID_GXM)) {
++			if (video_lut_swtich == 1)
++				set_vpp_lut(VPP_LUT_OETF,
++					oetf_289_gamma22_mapping_level1_box,
++					oetf_289_gamma22_mapping_level1_box,
++					oetf_289_gamma22_mapping_level1_box,
++					CSC_ON);
++			else if (video_lut_swtich == 2)
++				set_vpp_lut(VPP_LUT_OETF,
++					oetf_289_gamma22_mapping_level2_box,
++					oetf_289_gamma22_mapping_level2_box,
++					oetf_289_gamma22_mapping_level2_box,
++					CSC_ON);
++			else if (video_lut_swtich == 3)
++				set_vpp_lut(VPP_LUT_OETF,
++					oetf_289_gamma22_mapping_level3_box,
++					oetf_289_gamma22_mapping_level3_box,
++					oetf_289_gamma22_mapping_level3_box,
++					CSC_ON);
++			else if (video_lut_swtich == 4)
++				set_vpp_lut(VPP_LUT_OETF,
++					oetf_289_gamma22_mapping_level4_box,
++					oetf_289_gamma22_mapping_level4_box,
++					oetf_289_gamma22_mapping_level4_box,
++					CSC_ON);
++			else
++				/* oetf lut bypass */
++				set_vpp_lut(VPP_LUT_OETF,
++					oetf_289_gamma22_mapping_box,
++					oetf_289_gamma22_mapping_box,
++					oetf_289_gamma22_mapping_box,
++					CSC_ON);
++		} else
++			set_vpp_lut(VPP_LUT_OETF,
++				oetf_289_gamma22_mapping,
++				oetf_289_gamma22_mapping,
++				oetf_289_gamma22_mapping,
++				CSC_ON);
++	}
++}
+ static int hdr_process(
+ 	enum vpp_matrix_csc_e csc_type,
+ 	struct vinfo_s *vinfo,
+@@ -3284,11 +3385,7 @@ static int hdr_process(
+ 			CSC_ON);
+ 
+ 		/* eotf lut 2048 */
+-		set_vpp_lut(VPP_LUT_EOTF,
+-			eotf_33_2084_mapping, /* R */
+-			eotf_33_2084_mapping, /* G */
+-			eotf_33_2084_mapping, /* B */
+-			CSC_ON);
++		vpp_lut_curve_set(VPP_LUT_EOTF);
+ 
+ 		need_adjust_contrast_saturation = 0;
+ 		saturation_offset =	0;
+@@ -3321,12 +3418,7 @@ static int hdr_process(
+ 			mtx,
+ 			CSC_ON);
+ 
+-		/* oetf lut bypass */
+-		set_vpp_lut(VPP_LUT_OETF,
+-			oetf_289_gamma22_mapping,
+-			oetf_289_gamma22_mapping,
+-			oetf_289_gamma22_mapping,
+-			CSC_ON);
++		vpp_lut_curve_set(VPP_LUT_OETF);
+ 
+ 		/* xvyccc matrix3: bypass */
+ 		if (vinfo->viu_color_fmt != TVIN_RGB444)
+@@ -3801,7 +3893,8 @@ static void vpp_matrix_update(struct vframe_s *vf, struct vinfo_s *vinfo)
+ 		csc_type = get_csc_type();
+ 
+ 	if ((vinfo->viu_color_fmt != TVIN_RGB444) &&
+-		(vinfo->hdr_info.hdr_support & 0x4)) {
++		((vinfo->hdr_info.hdr_support & 0x4) ||
++		(signal_change_flag & SIG_HDR_SUPPORT))) {
+ 		if (sdr_process_mode &&
+ 			(csc_type < VPP_MATRIX_BT2020YUV_BT2020RGB)) {
+ 			/* sdr source convert to hdr */
+@@ -3824,9 +3917,10 @@ static void vpp_matrix_update(struct vframe_s *vf, struct vinfo_s *vinfo)
+ 					| (5 << 26)	/* unspecified */
+ 					| (0 << 25)	/* limit */
+ 					| (1 << 24)	/* color available */
+-					| (9 << 16)	/* bt2020 */
+-					| (14 << 8)	/* bt2020-10 */
+-					| (10 << 0);	/* bt2020c */
++					/* bt2020 */
++					| (signal_color_primaries << 16)
++					/* bt2020-10 */
++					| (signal_transfer_characteristic << 8);
+ 		} else {
+ 			/* sdr source send normal info
+ 			 * use the features to discribe source info */
+@@ -3847,7 +3941,8 @@ static void vpp_matrix_update(struct vframe_s *vf, struct vinfo_s *vinfo)
+ 
+ 	if ((cur_csc_type != csc_type)
+ 	|| (signal_change_flag
+-	& (SIG_PRI_INFO | SIG_KNEE_FACTOR | SIG_HDR_MODE))) {
++	& (SIG_PRI_INFO | SIG_KNEE_FACTOR | SIG_HDR_MODE |
++		SIG_HDR_SUPPORT))) {
+ 		/* decided by edid or panel info or user setting */
+ 		if ((csc_type == VPP_MATRIX_BT2020YUV_BT2020RGB) &&
+ 			hdr_process_mode) {
+@@ -3855,7 +3950,8 @@ static void vpp_matrix_update(struct vframe_s *vf, struct vinfo_s *vinfo)
+ 			if ((signal_change_flag &
+ 					(SIG_PRI_INFO |
+ 					SIG_KNEE_FACTOR |
+-					SIG_HDR_MODE)
++					SIG_HDR_MODE |
++					SIG_HDR_SUPPORT)
+ 				) ||
+ 				(cur_csc_type <
+ 					VPP_MATRIX_BT2020YUV_BT2020RGB)) {
+@@ -3978,7 +4074,8 @@ void amvecm_matrix_process(struct vframe_s *vf)
+ 		/* check last signal type */
+ 		if ((last_vf != NULL) &&
+ 			((((last_vf->signal_type >> 16) & 0xff) == 9)
+-			|| customer_master_display_en))
++			|| customer_master_display_en
++			|| (((last_vf->signal_type >> 8) & 0xff) >= 14)))
+ 			null_vf_cnt++;
+ 
+ 		if ((((READ_VPP_REG(VPP_MISC) & (1<<10)) == 0)
+diff --git a/drivers/amlogic/amvecm/arch/hdr_curve.h b/drivers/amlogic/amvecm/arch/hdr_curve.h
+index b3eef38..c9c17b4 100644
+--- a/drivers/amlogic/amvecm/arch/hdr_curve.h
++++ b/drivers/amlogic/amvecm/arch/hdr_curve.h
+@@ -879,6 +879,251 @@ unsigned int oetf_289_gamma22_table[][289] = {
+ 	1023
+ 	}
+ };
++/*Mbox: iptv/ott hdr curve select*/
++/*600nit alpha_low = 0.12; */
++static unsigned int eotf_33_2084_mapping_box[33] = {
++	    0,     4,    10,    16,    24,    34,    48,    67,
++	   93,   129,   177,   244,   334,   455,   636,   881,
++	 1209,  1648,  2234,  3014,  4050,  5425,  7251,  9673,
++	12889, 13773, 14513, 15117, 15594, 15951, 16196, 16338,
++	16383
++};
++
++static unsigned int oetf_289_gamma22_mapping_box[289] = {
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,  115,  157,  189,  215,  238,  259,  278,
++	 296,  312,  327,  342,  356,  369,  381,  394,
++	 405,  417,  428,  438,  449,  459,  468,  478,
++	 487,  496,  505,  514,  523,  531,  540,  548,
++	 556,  564,  571,  579,  586,  594,  601,  608,
++	 615,  622,  629,  636,  642,  649,  655,  662,
++	 668,  675,  681,  688,  695,  702,  709,  715,
++	 722,  729,  735,  741,  747,  753,  759,  764,
++	 769,  773,  777,  781,  784,  786,  789,  791,
++	 794,  796,  799,  801,  803,  806,  808,  811,
++	 813,  815,  818,  820,  822,  825,  827,  829,
++	 831,  834,  836,  838,  840,  842,  845,  847,
++	 849,  851,  853,  855,  857,  860,  862,  864,
++	 866,  868,  870,  872,  874,  876,  878,  880,
++	 882,  884,  886,  887,  889,  891,  893,  895,
++	 897,  899,  900,  902,  904,  906,  908,  909,
++	 911,  913,  915,  916,  918,  920,  921,  923,
++	 925,  926,  928,  929,  931,  932,  934,  936,
++	 937,  939,  940,  942,  943,  945,  946,  947,
++	 949,  950,  952,  953,  954,  956,  957,  958,
++	 960,  961,  962,  964,  965,  966,  967,  969,
++	 970,  971,  972,  973,  974,  976,  977,  978,
++	 979,  980,  981,  982,  983,  984,  985,  986,
++	 987,  988,  989,  990,  991,  992,  993,  994,
++	 995,  996,  996,  997,  998,  999, 1000, 1001,
++	1001, 1002, 1003, 1004, 1004, 1005, 1006, 1006,
++	1007, 1008, 1008, 1009, 1010, 1010, 1011, 1011,
++	1012, 1012, 1013, 1014, 1014, 1015, 1015, 1015,
++	1016, 1016, 1017, 1017, 1018, 1018, 1018, 1019,
++	1019, 1019, 1020, 1020, 1020, 1020, 1021, 1021,
++	1021, 1021, 1022, 1022, 1022, 1022, 1022, 1022,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023
++};
++
++/*350nit alpha_low = 0.12; */
++static unsigned int eotf_33_2084_mapping_level1_box[33] = {
++	    0,     4,    10,    16,    24,    34,    48,    67,
++	   93,   129,   177,   244,   334,   455,   636,   881,
++	 1209,  1648,  2234,  3014,  4050,  5425,  7251,  9673,
++	12889, 13773, 14513, 15117, 15594, 15951, 16196, 16338,
++	16383
++};
++
++static unsigned int oetf_289_gamma22_mapping_level1_box[289] = {
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,  148,  201,  242,  276,  305,  331,  355,
++	 378,  399,  418,  437,  454,  471,  487,  503,
++	 518,  532,  546,  560,  573,  586,  598,  610,
++	 622,  634,  645,  656,  667,  678,  689,  699,
++	 710,  720,  730,  741,  752,  764,  775,  786,
++	 797,  807,  816,  825,  832,  839,  844,  847,
++	 849,  851,  853,  855,  857,  859,  861,  863,
++	 865,  867,  869,  871,  872,  874,  876,  878,
++	 880,  881,  883,  885,  887,  888,  890,  892,
++	 893,  895,  897,  898,  900,  902,  903,  905,
++	 906,  908,  910,  911,  913,  914,  916,  917,
++	 919,  920,  921,  923,  924,  926,  927,  928,
++	 930,  931,  933,  934,  935,  937,  938,  939,
++	 940,  942,  943,  944,  945,  947,  948,  949,
++	 950,  951,  952,  954,  955,  956,  957,  958,
++	 959,  960,  961,  962,  963,  964,  965,  966,
++	 967,  968,  969,  970,  971,  972,  973,  974,
++	 975,  976,  977,  978,  979,  980,  980,  981,
++	 982,  983,  984,  985,  985,  986,  987,  988,
++	 988,  989,  990,  991,  991,  992,  993,  993,
++	 994,  995,  995,  996,  997,  997,  998,  999,
++	 999, 1000, 1000, 1001, 1002, 1002, 1003, 1003,
++	1004, 1004, 1005, 1005, 1006, 1006, 1007, 1007,
++	1008, 1008, 1009, 1009, 1010, 1010, 1010, 1011,
++	1011, 1012, 1012, 1012, 1013, 1013, 1013, 1014,
++	1014, 1014, 1015, 1015, 1015, 1016, 1016, 1016,
++	1017, 1017, 1017, 1017, 1018, 1018, 1018, 1018,
++	1019, 1019, 1019, 1019, 1020, 1020, 1020, 1020,
++	1020, 1020, 1021, 1021, 1021, 1021, 1021, 1021,
++	1022, 1022, 1022, 1022, 1022, 1022, 1022, 1022,
++	1022, 1022, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023
++};
++
++/*800nit alpha_low = 0.12; */
++static unsigned int eotf_33_2084_mapping_level2_box[33] = {
++	    0,     4,     8,    12,    18,    24,    33,    43,
++	   58,    77,   103,   138,   184,   246,   329,   440,
++	  605,   824,  1117,  1507,  2025,  2713,  3625,  4836,
++	 6445,  8583, 11430, 15228, 15695, 16025, 16237, 16350,
++	16383
++};
++
++static unsigned int oetf_289_gamma22_mapping_level2_box[289] = {
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,  139,  189,  227,  259,  288,  312,  335,
++	 356,  375,  393,  411,  427,  443,  458,  473,
++	 487,  501,  514,  527,  539,  551,  563,  574,
++	 586,  597,  607,  618,  628,  639,  649,  658,
++	 668,  678,  687,  696,  705,  714,  722,  731,
++	 739,  747,  756,  764,  772,  780,  787,  795,
++	 803,  811,  819,  827,  836,  844,  850,  854,
++	 856,  858,  860,  862,  864,  866,  868,  870,
++	 872,  873,  875,  877,  879,  881,  883,  884,
++	 886,  888,  890,  891,  893,  895,  896,  898,
++	 900,  901,  903,  905,  906,  908,  909,  911,
++	 912,  914,  916,  917,  919,  920,  922,  923,
++	 924,  926,  927,  929,  930,  931,  933,  934,
++	 936,  937,  938,  939,  941,  942,  943,  945,
++	 946,  947,  948,  949,  951,  952,  953,  954,
++	 955,  956,  958,  959,  960,  961,  962,  963,
++	 964,  965,  966,  967,  968,  969,  970,  971,
++	 972,  973,  974,  975,  976,  977,  978,  979,
++	 980,  980,  981,  982,  983,  984,  985,  985,
++	 986,  987,  988,  989,  989,  990,  991,  992,
++	 992,  993,  994,  994,  995,  996,  996,  997,
++	 998,  998,  999, 1000, 1000, 1001, 1001, 1002,
++	1002, 1003, 1004, 1004, 1005, 1005, 1006, 1006,
++	1007, 1007, 1008, 1008, 1009, 1009, 1010, 1010,
++	1010, 1011, 1011, 1012, 1012, 1012, 1013, 1013,
++	1014, 1014, 1014, 1015, 1015, 1015, 1016, 1016,
++	1016, 1017, 1017, 1017, 1017, 1018, 1018, 1018,
++	1018, 1019, 1019, 1019, 1019, 1020, 1020, 1020,
++	1020, 1020, 1020, 1021, 1021, 1021, 1021, 1021,
++	1021, 1022, 1022, 1022, 1022, 1022, 1022, 1022,
++	1022, 1022, 1022, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023
++};
++
++/*400nit alpha_low = 0.20; */
++static unsigned int eotf_33_2084_mapping_level3_box[33] = {
++	    0,     7,    15,    24,    34,    47,    63,    83,
++	  110,   146,   193,   257,   342,   455,   636,   881,
++	 1209,  1648,  2234,  3014,  4050,  5425,  7251,  9673,
++	12889, 13773, 14513, 15117, 15594, 15951, 16196, 16338,
++	16383
++};
++
++static unsigned int oetf_289_gamma22_mapping_level3_box[289] = {
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,  139,  189,  228,  259,  287,  312,  334,
++	 356,  375,  394,  411,  427,  443,  458,  473,
++	 487,  501,  514,  527,  540,  552,  564,  575,
++	 586,  597,  608,  618,  629,  639,  649,  658,
++	 668,  677,  687,  697,  708,  718,  729,  739,
++	 749,  758,  767,  775,  782,  788,  793,  797,
++	 800,  802,  804,  807,  809,  812,  814,  816,
++	 819,  821,  823,  826,  828,  830,  832,  835,
++	 837,  839,  841,  843,  845,  848,  850,  852,
++	 854,  856,  858,  860,  862,  864,  866,  868,
++	 870,  872,  874,  876,  878,  880,  882,  883,
++	 885,  887,  889,  891,  892,  894,  896,  898,
++	 899,  901,  903,  905,  906,  908,  910,  911,
++	 913,  914,  916,  918,  919,  921,  922,  924,
++	 925,  927,  928,  930,  931,  933,  934,  935,
++	 937,  938,  940,  941,  942,  944,  945,  946,
++	 948,  949,  950,  951,  953,  954,  955,  956,
++	 958,  959,  960,  961,  962,  963,  964,  966,
++	 967,  968,  969,  970,  971,  972,  973,  974,
++	 975,  976,  977,  978,  979,  980,  981,  982,
++	 983,  984,  984,  985,  986,  987,  988,  989,
++	 990,  990,  991,  992,  993,  993,  994,  995,
++	 996,  996,  997,  998,  999,  999, 1000, 1001,
++	1001, 1002, 1002, 1003, 1004, 1004, 1005, 1005,
++	1006, 1007, 1007, 1008, 1008, 1009, 1009, 1010,
++	1010, 1011, 1011, 1012, 1012, 1012, 1013, 1013,
++	1014, 1014, 1014, 1015, 1015, 1016, 1016, 1016,
++	1017, 1017, 1017, 1018, 1018, 1018, 1018, 1019,
++	1019, 1019, 1019, 1020, 1020, 1020, 1020, 1021,
++	1021, 1021, 1021, 1021, 1021, 1022, 1022, 1022,
++	1022, 1022, 1022, 1022, 1022, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023
++};
++
++/*450nit  alpha_low = 0.12;*/
++static unsigned int eotf_33_2084_mapping_level4_box[33] = {
++	    0,     4,    10,    16,    24,    34,    48,    67,
++	   93,   129,   177,   244,   334,   455,   636,   881,
++	 1209,  1648,  2234,  3014,  4050,  5425,  7251,  9673,
++	12889, 13773, 14513, 15117, 15594, 15951, 16196, 16338,
++	16383
++};
++
++static unsigned int oetf_289_gamma22_mapping_level4_box[289] = {
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,    0,    0,    0,    0,    0,    0,    0,
++	   0,  131,  179,  216,  245,  272,  295,  317,
++	 337,  356,  374,  390,  406,  421,  435,  449,
++	 462,  475,  488,  500,  512,  523,  534,  545,
++	 556,  566,  576,  586,  596,  605,  615,  624,
++	 633,  642,  651,  660,  668,  676,  685,  693,
++	 701,  709,  717,  725,  732,  740,  747,  754,
++	 762,  769,  777,  785,  793,  802,  810,  818,
++	 826,  834,  842,  849,  856,  863,  869,  875,
++	 880,  885,  889,  892,  894,  896,  897,  899,
++	 900,  902,  904,  905,  907,  908,  909,  911,
++	 912,  914,  915,  917,  918,  919,  921,  922,
++	 924,  925,  926,  928,  929,  930,  931,  933,
++	 934,  935,  937,  938,  939,  940,  941,  943,
++	 944,  945,  946,  947,  948,  950,  951,  952,
++	 953,  954,  955,  956,  957,  958,  959,  960,
++	 961,  962,  963,  964,  965,  966,  967,  968,
++	 969,  970,  971,  972,  973,  974,  975,  976,
++	 976,  977,  978,  979,  980,  981,  981,  982,
++	 983,  984,  985,  985,  986,  987,  988,  988,
++	 989,  990,  990,  991,  992,  993,  993,  994,
++	 994,  995,  996,  996,  997,  998,  998,  999,
++	 999, 1000, 1001, 1001, 1002, 1002, 1003, 1003,
++	1004, 1004, 1005, 1005, 1006, 1006, 1007, 1007,
++	1008, 1008, 1009, 1009, 1009, 1010, 1010, 1011,
++	1011, 1012, 1012, 1012, 1013, 1013, 1013, 1014,
++	1014, 1014, 1015, 1015, 1015, 1016, 1016, 1016,
++	1017, 1017, 1017, 1017, 1018, 1018, 1018, 1018,
++	1019, 1019, 1019, 1019, 1019, 1020, 1020, 1020,
++	1020, 1020, 1021, 1021, 1021, 1021, 1021, 1021,
++	1021, 1022, 1022, 1022, 1022, 1022, 1022, 1022,
++	1022, 1022, 1022, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023,
++	1023
++};
+ 
+ #endif
+ 
+diff --git a/drivers/amlogic/video_dev/amlvideo2.c b/drivers/amlogic/video_dev/amlvideo2.c
+index 2001a03..848dda2 100644
+--- a/drivers/amlogic/video_dev/amlvideo2.c
++++ b/drivers/amlogic/video_dev/amlvideo2.c
+@@ -4891,7 +4891,7 @@ static int amlvideo2_open(struct file *file)
+ 	if (AML_RECEIVER_NONE == node->r_type)
+ 		amlvideo2_start_thread(fh);
+ 
+-	v4l2_vdin_ops_init(&node->vops);
++	//v4l2_vdin_ops_init(&node->vops);
+ 	fh->frm_save_time_us = 1000000 / DEF_FRAMERATE;
+ 	return 0;
+ }
